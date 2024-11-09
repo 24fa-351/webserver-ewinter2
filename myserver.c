@@ -19,7 +19,7 @@ void error(const char *msg) {
 }
 
 int request_count = 0;
-int total_bytes_received =0;
+int total_bytes_received = 0;
 int total_bytes_sent = 0;
 pthread_mutex_t stats_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -72,13 +72,22 @@ void handle_stats(int client_socket) {
     pthread_mutex_unlock(&stats_mutex);
 
     send(client_socket, response, strlen(response), 0);
+
+    pthread_mutex_lock(&stats_mutex);
+    total_bytes_sent += strlen(response);
+    pthread_mutex_unlock(&stats_mutex);
 }
 
 void handle_calc(int client_socket, const char *path) {
     char response[BUFFER_SIZE];
     int a = 0, b = 0;
 
-    sscanf(path, "/calc?a=%d&b=%d", &a, &b);
+    int parsed = sscanf(path, "/calc?a=%d&b=%d", &a, &b);
+    if (parsed != 2) {
+        sprintf(response, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+        send(client_socket, response, strlen(response), 0);
+        return;
+    }
 
     int sum = a + b;
     sprintf(response,
@@ -103,20 +112,30 @@ void *handle_client(void *arg) {
     printf("Connected to client on thread %lu\n", (unsigned long)pthread_self());
 
     bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
+    total_bytes_received += bytes_received;
+
     if (bytes_received <= 0) {
         close(client_socket);
         return NULL;    
     }
 
+    pthread_mutex_lock(&stats_mutex);
+    request_count++;
+    total_bytes_received += bytes_received;
+    pthread_mutex_unlock(&stats_mutex);
+
+    buffer[bytes_received] = '\0';
+    printf("Request received:\n%s\n", buffer);
+
     sscanf(buffer, "GET %255s HTTP/1.1", path);
 
-    if (strcmp(path, "/static") == 0) {
-        handle_static(client_socket, path+ 7);
+    if (strncmp(path, "/static", 7) == 0) {
+        handle_static(client_socket, path + 7);
     }
-    else if (strcmp(path, "stats") == 0) {
+    else if (strcmp(path, "/stats") == 0) {
         handle_stats(client_socket);
     }
-    else if(strcmp(path, "/calc") == 0) {
+    else if(strncmp(path, "/calc", 5) == 0) {
         handle_calc(client_socket, path + 5);
     }
     else {
